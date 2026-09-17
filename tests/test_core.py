@@ -84,3 +84,61 @@ def test_weather_probability_is_tempered_and_bounded():
     r = probability_warmer(members, _date(2026, 9, 27), _date(2026, 10, 4))
     assert r is not None and 0.75 < r.probability < 0.9  # +4 C at sigma 4 -> ~0.84
     assert probability_warmer(members, _date(2026, 9, 27), _date(2026, 10, 20)) is None
+
+
+def test_wikipedia_templates_and_release_rule():
+    from datetime import date as _date
+
+    from core import models_wikipedia as W
+
+    vaccine = _q("According to Wikipedia, will a vaccine have been developed for X by {resolution_date}?", "wikipedia")
+    rank = _q("According to Wikipedia, will A B have a FIDE ranking on {resolution_date} as high or higher than their ranking on {forecast_due_date}?", "wikipedia")
+    elo = _q("According to Wikipedia, will A B have an Elo rating on {resolution_date} that's at least 1% higher than on {forecast_due_date}?", "wikipedia")
+    assert W.classify(vaccine) == "vaccine"
+    assert W.classify(rank) == "as_high_or_higher"
+    assert W.classify(elo) == "pct_higher"
+    # A window with no month boundary cannot see a new FIDE list.
+    assert W.monthly_releases_in(_date(2026, 6, 21), _date(2026, 6, 28)) == 0
+    assert W.monthly_releases_in(_date(2026, 8, 30), _date(2026, 9, 6)) == 1
+    assert W.forecast(rank, _date(2026, 6, 21), _date(2026, 6, 28), 0.5).probability > 0.9
+    assert W.forecast(elo, _date(2026, 6, 21), _date(2026, 6, 28), 0.5).probability < 0.1
+    assert W.forecast(vaccine, _date(2026, 8, 30), _date(2026, 9, 6), 0.5).probability < 0.05
+
+
+def test_wikipedia_release_window_never_inherits_the_certain_rate():
+    from datetime import date as _date
+
+    from core import models_wikipedia as W
+
+    rank = _q("will A B have a FIDE ranking on {resolution_date} as high or higher than their ranking on {forecast_due_date}?", "wikipedia")
+    priors = W.WikipediaPriors()
+    for _ in range(40):  # a history of no-release windows, all yes
+        priors.add(rank, _date(2026, 6, 21), _date(2026, 6, 28), 1.0)
+    p = W.forecast(rank, _date(2026, 8, 30), _date(2026, 9, 6), 0.5, priors).probability
+    assert p < 0.9, p
+
+
+def test_acled_blend_weight_is_the_measured_one():
+    from core import models_dataset as M
+
+    est = M.Estimate(0.46, "poisson", 30)
+    blended = M.shrink(est, prior=0.15, shrink_n=M.ACLED_SHRINK_N).probability
+    assert abs(blended - (0.6 * 0.46 + 0.4 * 0.15)) < 1e-9
+
+
+def test_fred_flat_series_is_structural_no():
+    from datetime import date as _date
+
+    import numpy as np
+    import pandas as pd
+
+    from core import models_fred
+
+    idx = pd.date_range("2026-01-01", "2026-09-01", freq="D")
+    flat = pd.Series(np.full(len(idx), 4.25), index=idx)
+    q = _q("Will the value have increased by {resolution_date}?", "fred")
+    est = models_fred.forecast(q, _date(2026, 9, 1), _date(2026, 9, 8), flat, prior=0.5)
+    assert est.probability < 0.05 and "administered" in est.method
+    moving = pd.Series(np.linspace(4.0, 5.0, len(idx)), index=idx)
+    est2 = models_fred.forecast(q, _date(2026, 9, 1), _date(2026, 9, 8), moving, prior=0.5)
+    assert est2.probability > 0.5

@@ -15,13 +15,14 @@ import json
 from datetime import date
 from pathlib import Path
 
-from core import models_dataset, models_market, series
+from core import models_dataset, models_market, models_wikipedia, series
 from core.fb_questions import QuestionSet
 from forecastbench.backtest import PriorTable, load_resolutions
 
 
-def build_priors(history_dir: Path, before: date) -> PriorTable:
+def build_priors(history_dir: Path, before: date) -> tuple[PriorTable, "models_wikipedia.WikipediaPriors"]:
     priors = PriorTable()
+    wiki_priors = models_wikipedia.WikipediaPriors()
     for qpath in sorted(history_dir.glob("q_*.json")):
         stamp = qpath.name[2:12]
         rpath = history_dir / f"r_{stamp}.json"
@@ -33,9 +34,11 @@ def build_priors(history_dir: Path, before: date) -> PriorTable:
             q = by_key.get((str(r["id"]), r["source"]))
             if q is None or q.is_market or r.get("resolved_to") is None:
                 continue
-            horizon = (date.fromisoformat(r["resolution_date"]) - qs.forecast_due_date).days
-            priors.add(q, horizon, float(r["resolved_to"]))
-    return priors
+            rd = date.fromisoformat(r["resolution_date"])
+            priors.add(q, (rd - qs.forecast_due_date).days, float(r["resolved_to"]))
+            if q.source == "wikipedia":
+                wiki_priors.add(q, qs.forecast_due_date, rd, float(r["resolved_to"]))
+    return priors, wiki_priors
 
 
 def main() -> int:
@@ -50,7 +53,7 @@ def main() -> int:
     args = ap.parse_args()
 
     qs = QuestionSet.load(args.question_set)
-    priors = build_priors(args.history, qs.forecast_due_date)
+    priors, wiki_priors = build_priors(args.history, qs.forecast_due_date)
     forecasts: list[dict] = []
     methods: dict[str, int] = {}
 
@@ -67,7 +70,10 @@ def main() -> int:
         for rd in q.resolution_dates:
             horizon = (rd - qs.forecast_due_date).days
             prior = priors.prior(q, horizon)
-            est = models_dataset.forecast(q, qs.forecast_due_date, rd, hist, prior, use_weather_forecast=not args.no_live)
+            est = models_dataset.forecast(
+                q, qs.forecast_due_date, rd, hist, prior,
+                use_weather_forecast=not args.no_live, wiki_priors=wiki_priors,
+            )
             forecasts.append(
                 {"id": q.qid, "source": q.source, "forecast": round(est.probability, 4),
                  "resolution_date": rd.isoformat(), "reasoning": f"{est.method} n={est.n}"}

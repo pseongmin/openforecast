@@ -27,6 +27,8 @@ CLAMP_LOW, CLAMP_HIGH = 0.02, 0.98
 # Sample size at which the empirical estimate carries half the weight. Set from
 # the walk-forward sweep in forecastbench/backtest.py, not by taste.
 SHRINK_N = 40.0
+# Poisson estimates carry n=30, so shrink_n=20 gives them weight 30/(30+20)=0.6.
+ACLED_SHRINK_N = 20.0
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,7 @@ def forecast(
     prior: float,
     shrink_n: float = SHRINK_N,
     use_weather_forecast: bool = False,
+    wiki_priors=None,
 ) -> Estimate:
     """Pick the estimator the question's source and shape allow, then shrink.
 
@@ -203,6 +206,16 @@ def forecast(
     ratio = question.relative_threshold
     equal = question.allows_equal
     stamp = pd.Timestamp(asof)
+
+    if question.source == "wikipedia":
+        from core import models_wikipedia
+
+        return models_wikipedia.forecast(question, asof, resolution_date, prior, wiki_priors)
+
+    if question.source == "fred":
+        from core import models_fred
+
+        return models_fred.forecast(question, asof, resolution_date, history, prior, shrink_n)
 
     empirical: Estimate | None = None
     if question.source == "dbnomics" and horizon <= 16 and use_weather_forecast:
@@ -223,5 +236,9 @@ def forecast(
             empirical = horizon_change_probability(history, stamp, horizon, ratio, equal)
     elif question.source == "acled":
         empirical = poisson_count_probability(question.freeze_value, ratio)
+        # The Poisson tail discriminates within a round but is miscalibrated at the
+        # centre, so it is blended with the walk-forward rate. Weight 0.6 measured
+        # on rounds 2026-07-05..08-30 (0.0721 vs 0.0726 at the default 0.43).
+        return shrink(empirical, prior, ACLED_SHRINK_N)
 
     return shrink(empirical, prior, shrink_n)

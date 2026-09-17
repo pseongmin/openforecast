@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core import models_dataset, models_market, series
+from core import models_dataset, models_market, models_wikipedia, series
 from core.fb_questions import MARKET_SOURCES, Question, QuestionSet
 
 
@@ -53,7 +53,8 @@ class PriorTable:
 
 
 def evaluate_round(
-    qs: QuestionSet, resolutions: list[dict], priors: PriorTable, shrink_n: float, use_live: bool
+    qs: QuestionSet, resolutions: list[dict], priors: PriorTable, shrink_n: float, use_live: bool,
+    wiki_priors=None,
 ) -> dict:
     by_key = {(q.qid, q.source): q for q in qs.questions}
     rows = []
@@ -70,7 +71,7 @@ def evaluate_round(
             horizon = (rd - qs.forecast_due_date).days
             hist = series.load(q.source, q.qid)
             prior = priors.prior(q, horizon)
-            est = models_dataset.forecast(q, qs.forecast_due_date, rd, hist, prior, shrink_n)
+            est = models_dataset.forecast(q, qs.forecast_due_date, rd, hist, prior, shrink_n, wiki_priors=wiki_priors)
             rows.append(("dataset", q.source, horizon, est.probability, y, est.method))
     return summarise(rows)
 
@@ -102,12 +103,13 @@ def main() -> int:
 
     rounds = sorted(p.name[2:12] for p in args.data.glob("q_*.json") if (args.data / f"r_{p.name[2:12]}.json").exists())
     priors = PriorTable()
+    wiki_priors = models_wikipedia.WikipediaPriors()
     print(f"rounds: {rounds}  cache: {series.coverage()}")
     for i, d in enumerate(rounds):
         qs = QuestionSet.load(args.data / f"q_{d}.json")
         res = load_resolutions(args.data / f"r_{d}.json")
         if i >= 1:
-            summary = evaluate_round(qs, res, priors, args.shrink_n, args.live)
+            summary = evaluate_round(qs, res, priors, args.shrink_n, args.live, wiki_priors)
             ds, mk = summary.get("dataset", {}), summary.get("market", {})
             print(
                 f"{d}  dataset n={ds.get('n', 0):4d} brier={ds.get('brier', float('nan')):.4f} idx={ds.get('index', float('nan')):5.1f}"
@@ -120,8 +122,10 @@ def main() -> int:
             q = by_key.get((str(r["id"]), r["source"]))
             if q is None or q.is_market or r.get("resolved_to") is None:
                 continue
-            horizon = (date.fromisoformat(r["resolution_date"]) - qs.forecast_due_date).days
-            priors.add(q, horizon, float(r["resolved_to"]))
+            rd = date.fromisoformat(r["resolution_date"])
+            priors.add(q, (rd - qs.forecast_due_date).days, float(r["resolved_to"]))
+            if q.source == "wikipedia":
+                wiki_priors.add(q, qs.forecast_due_date, rd, float(r["resolved_to"]))
     return 0
 
 
