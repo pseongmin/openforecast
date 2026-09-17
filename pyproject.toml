@@ -1,0 +1,19 @@
+[project]
+name = "openforecast"
+version = "0.1.0"
+description = "Open forecasting agents for public benchmarks (ForecastBench, Metaculus FutureEval, Agenthon 2026)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.26", "pandas>=2.2", "requests>=2.31", "pyarrow>=15"]
+
+[project.optional-dependencies]
+data = ["yfinance>=0.2"]
+metaculus = ["forecasting-tools>=0.3", "python-dotenv"]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["core", "forecastbench", "agenthon", "agenthon.qfagent", "tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

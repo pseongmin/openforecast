@@ -89,37 +89,59 @@ def seasonal_change_probability(
     horizon_days: int,
     threshold_ratio: float,
     allow_equal: bool,
-    window_days: int = 12,
+    window_days: int = 15,
+    publication_lag_days: int = 3,
 ) -> "Estimate | None":
-    """Same as above but restricted to the same time of year.
+    """Seasonal *and* anomaly-conditioned estimate for daily weather-like series.
 
-    Daily temperature forces this: an unconditional 7-day change says nothing,
-    while "is mid-September warmer than early September" is close to a calendar
-    fact.
+    Two facts drive the design (measured on the 2026-08-30 round, where a plain
+    seasonal model scored worse than 0.5): the 7-day change in temperature is
+    predicted far better by the current anomaly against the day-of-year normal
+    (anomalies mean-revert) than by the calendar alone, and the value on the
+    forecast due date is not yet published when the forecast is made, so the
+    anomaly is read off the last observation available under the publication lag.
     """
-    hist = history[history.index <= asof]
-    if len(hist) < 200:
-        return None
-    target_doy = asof.dayofyear
-    doy = hist.index.dayofyear.to_numpy()
-    delta = np.minimum(np.abs(doy - target_doy), 365 - np.abs(doy - target_doy))
-    idx = np.flatnonzero(delta <= window_days)
-    if len(idx) < 20:
+    cutoff = asof - pd.Timedelta(days=publication_lag_days)
+    hist = history[history.index <= cutoff]
+    if len(hist) < 365 * 3:
         return None
     values = hist.to_numpy(dtype=float)
-    dates = hist.index.to_numpy()
-    later = np.searchsorted(dates, dates[idx] + np.timedelta64(horizon_days, "D"))
-    valid = later < len(values)
-    idx, later = idx[valid], later[valid]
-    if len(idx) < 15:
+    dates = hist.index
+    doy = dates.dayofyear.to_numpy()
+    # Day-of-year climatology, smoothed over +-window_days.
+    normal = np.full(367, np.nan)
+    for d in range(1, 367):
+        delta = np.minimum(np.abs(doy - d), 366 - np.abs(doy - d))
+        sel = delta <= window_days
+        if sel.sum() >= 20:
+            normal[d] = np.nanmean(values[sel])
+    if np.isnan(normal[asof.dayofyear]):
         return None
-    base, future = values[idx], values[later]
+    current_anom = values[-1] - normal[doy[-1]]
+
+    # Historical analogues: same season, similar anomaly, and a later value h days on.
+    target_doy = asof.dayofyear
+    delta = np.minimum(np.abs(doy - target_doy), 366 - np.abs(doy - target_doy))
+    idx = np.flatnonzero(delta <= window_days)
+    anoms = values[idx] - normal[doy[idx]]
+    spread = np.nanstd(values - normal[doy]) or 1.0
+    close = np.abs(anoms - current_anom) <= 0.6 * spread
+    idx = idx[close]
+    if len(idx) < 20:
+        return None
+    later = np.searchsorted(dates.to_numpy(), dates.to_numpy()[idx] + np.timedelta64(horizon_days + publication_lag_days, "D"))
+    base_later = np.searchsorted(dates.to_numpy(), dates.to_numpy()[idx] + np.timedelta64(publication_lag_days, "D"))
+    valid = (later < len(values)) & (base_later < len(values))
+    idx, later, base_later = idx[valid], later[valid], base_later[valid]
+    if len(idx) < 20:
+        return None
+    base, future = values[base_later], values[later]
     ok = (base != 0) & np.isfinite(base) & np.isfinite(future)
-    if ok.sum() < 15:
+    if ok.sum() < 20:
         return None
     ratio = future[ok] / base[ok]
     hits = ratio >= threshold_ratio if allow_equal else ratio > threshold_ratio
-    return Estimate(float(hits.mean()), "seasonal", int(ok.sum()))
+    return Estimate(float(hits.mean()), "seasonal-anomaly", int(ok.sum()))
 
 
 def poisson_count_probability(
@@ -144,6 +166,24 @@ def poisson_count_probability(
     return Estimate(float(max(0.0, 1.0 - cdf)), "poisson", 30)
 
 
+PRIOR_ONLY_SHORT_HORIZON = {
+    # Equity 7/30-day outcomes move together across the whole question set, so a
+    # per-ticker drift estimate is mostly noise there (measured 2026-09-17:
+    # empirical 0.25-0.28 Brier vs pooled prior 0.249).
+    "yfinance": 30,
+    # Daily temperature 7/30-day questions compare two values that are BOTH
+    # unobserved at forecast time (publication lag ~3 days), so they are weather
+    # forecasts, not statistics. Until the ensemble-forecast estimator lands
+    # (core/models_weather.py), the pooled prior is the honest answer.
+    "dbnomics": 30,
+}
+
+
+def use_prior_only(source: str, horizon_days: int) -> bool:
+    limit = PRIOR_ONLY_SHORT_HORIZON.get(source)
+    return limit is not None and horizon_days <= limit
+
+
 def forecast(
     question: Question,
     asof: date,
@@ -159,6 +199,11 @@ def forecast(
     stamp = pd.Timestamp(asof)
 
     empirical: Estimate | None = None
+    if use_prior_only(question.source, horizon):
+        # Within one round these questions resolve together (one market week,
+        # one weather week), so a pooled prior from earlier rounds is a bet on
+        # that week, not knowledge: 0.375 vs 0.79 realised on 2026-07-05.
+        return Estimate(0.5, "flat", 0)
     if history is not None and len(history) > 0:
         if question.source == "dbnomics":
             empirical = seasonal_change_probability(history, stamp, horizon, ratio, equal)

@@ -53,13 +53,21 @@ def kalshi_probability(ticker: str) -> float | None:
         m = r.json().get("market", {})
     except (requests.RequestException, ValueError):
         return None
-    # Prefer the mid of the yes book; fall back to last traded price. Prices are in cents.
-    bid, ask, last = m.get("yes_bid"), m.get("yes_ask"), m.get("last_price")
-    if isinstance(bid, (int, float)) and isinstance(ask, (int, float)) and ask >= bid > 0:
-        return (bid + ask) / 200.0
-    if isinstance(last, (int, float)) and last > 0:
-        return last / 100.0
+    # Prefer the mid of the yes book; fall back to last traded price. The public
+    # API reports prices as dollar strings ("0.9710"), measured 2026-09-17.
+    bid, ask, last = _dollars(m.get("yes_bid_dollars")), _dollars(m.get("yes_ask_dollars")), _dollars(m.get("last_price_dollars"))
+    if bid is not None and ask is not None and ask >= bid > 0:
+        return (bid + ask) / 2.0
+    if last is not None and last > 0:
+        return last
     return None
+
+
+def _dollars(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 LIVE_FETCHERS = {
