@@ -48,22 +48,25 @@ def fetch_daily_mean_members(lat: float, lon: float, forecast_days: int = 16, mo
 
 
 def probability_warmer(
-    members: dict[date, list[float]], day_base: date, day_target: date, threshold_ratio: float = 1.0
-) -> EnsembleResult | None:
+    members: dict[date, list[float]], day_base: date, day_target: date, sigma: float | None = None
+) -> "EnsembleResult | None":
+    """P(daily mean on day_target > daily mean on day_base).
+
+    The ensemble *mean* difference is mapped through a Gaussian whose width was
+    measured on 2026-06..09 forecast errors (``DIFF_SIGMA_C``), because the raw
+    member share is over-confident: the day-0/1 members are under-dispersed
+    (sd 0.5 C vs a 1.1 C realised error) and the sweep in the backtest notes
+    showed pooled Brier still falling at sigma 4.0.
+    """
     base, target = members.get(day_base), members.get(day_target)
     if not base or not target:
         return None
     n = min(len(base), len(target))
     if n < 10:
         return None
-    hits = 0
-    for b, t in zip(base[:n], target[:n]):
-        # Temperatures can be negative; the question is a plain "higher than"
-        # comparison, so the ratio form only matters for the 1.0 threshold used here.
-        if t > b * threshold_ratio if b > 0 else t > b:
-            hits += 1
-    # Laplace-smoothed so one ensemble cannot produce a 0 or 1.
-    return EnsembleResult((hits + 1) / (n + 2), n, day_base, day_target)
+    diff = sum(target[:n]) / n - sum(base[:n]) / n
+    p = gaussian_probability(diff, 0.0, sigma if sigma is not None else DIFF_SIGMA_C)
+    return EnsembleResult(min(max(p, 0.03), 0.97), n, day_base, day_target)
 
 
 # --- Station lookup and the ForecastBench adapter -----------------------------
@@ -74,9 +77,10 @@ from functools import lru_cache
 from pathlib import Path
 
 STATIONS_FILE = Path(__file__).resolve().parents[1] / "cache" / "meteofrance_stations.json"
-# Fitted once on 2026-06..09 Open-Meteo previous-run errors (see forecastbench/backtest
-# notes): sd of the day-7 minus day-1 forecast-difference error, in degrees C.
-DIFF_SIGMA_C = 2.6
+# Chosen on the 2026-06-21..08-30 rounds (n=286 seven-day questions): pooled Brier
+# 0.200 at 2.0 C, 0.193 at 2.6 C, 0.190 at 3.0 C, 0.186 at 4.0 C; the realised error
+# sd of the day-7 minus day-1 difference is 2.4 C, so 4.0 C is deliberately wider.
+DIFF_SIGMA_C = 4.0
 
 
 @lru_cache(maxsize=1)

@@ -73,3 +73,14 @@ def test_leak_guard_catches_planted_marker(tmp_path: Path):
     # Build the markers at runtime so this file never carries them literally.
     bad.write_text("see " + "/home/" + "someone/secret and host " + "ksad" + "lq001")
     assert len(scan([str(bad)])) == 2
+
+
+def test_weather_probability_is_tempered_and_bounded():
+    from datetime import date as _date
+
+    from core.models_weather import probability_warmer
+
+    members = {_date(2026, 9, 27): [18.0] * 50, _date(2026, 10, 4): [22.0] * 50}
+    r = probability_warmer(members, _date(2026, 9, 27), _date(2026, 10, 4))
+    assert r is not None and 0.75 < r.probability < 0.9  # +4 C at sigma 4 -> ~0.84
+    assert probability_warmer(members, _date(2026, 9, 27), _date(2026, 10, 20)) is None
