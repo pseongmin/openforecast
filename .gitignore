@@ -7,3 +7,4 @@ data/raw/
 out/
 *.parquet
 !agenthon/fixtures/*.parquet
+*.egg-info/
