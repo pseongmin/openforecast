@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
+import pandas as pd
 import requests
 
 ENSEMBLE_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
@@ -121,3 +123,48 @@ def forecastbench_probability(series_id: str, day_base: date, day_target: date) 
     except (requests.RequestException, KeyError, ValueError):
         return None
     return probability_warmer(members, day_base, day_target)
+
+
+# --- Climatology for horizons beyond the ensemble range -----------------------
+
+def _day_of_year_normal(history: pd.Series, day: int, window_days: int = 15) -> float | None:
+    """Mean value within +-window_days of that day of year, over the whole history."""
+    doy = history.index.dayofyear.to_numpy()
+    distance = np.minimum(np.abs(doy - day), 366 - np.abs(doy - day))
+    selected = history.to_numpy(dtype=float)[distance <= window_days]
+    if selected.size < 20:
+        return None
+    return float(np.nanmean(selected))
+
+
+# REJECTED as a shipped estimator (2026-09-17). Fitting (reversion, sigma) on the
+# rounds before each scored round and scoring the next one gives pooled Brier
+# 0.2864 against 0.2500 for a flat 0.5 — worse, and wildly unstable round to round
+# (0.4696 then 0.1108). The in-sample fit that suggested it scored 0.2020, which is
+# what an overfit looks like. Kept for reference and used by the experiment only.
+def climatological_probability(
+    history: pd.Series,
+    asof: date,
+    resolution_date: date,
+    reversion: float,
+    sigma: float,
+    publication_lag_days: int = 3,
+) -> "EnsembleResult | None":
+    """P(value on resolution_date > value on asof) from season plus mean reversion.
+
+    Beyond the ensemble's 15-day range the only usable signals are (a) how the
+    season itself moves between the two dates and (b) that today's anomaly decays.
+    Both constants are supplied by the caller so they can be fitted walk-forward.
+    """
+    cutoff = pd.Timestamp(asof) - pd.Timedelta(days=publication_lag_days)
+    observable = history[history.index <= cutoff]
+    if len(observable) < 365 * 3:
+        return None
+    normal_asof = _day_of_year_normal(observable, pd.Timestamp(asof).dayofyear)
+    normal_target = _day_of_year_normal(observable, pd.Timestamp(resolution_date).dayofyear)
+    if normal_asof is None or normal_target is None:
+        return None
+    anomaly = float(observable.to_numpy(dtype=float)[-1]) - normal_asof
+    expected_change = (normal_target - normal_asof) - reversion * anomaly
+    p = gaussian_probability(expected_change, 0.0, sigma)
+    return EnsembleResult(min(max(p, 0.05), 0.95), len(observable), asof, resolution_date)
