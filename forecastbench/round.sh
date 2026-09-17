@@ -20,6 +20,10 @@ for q in "$HIST"/q_*.json; do
   curl -sfL "$RAW/resolution_sets/${d}_resolution_set.json" -o "$HIST/r_${d}.json.tmp" && mv "$HIST/r_${d}.json.tmp" "$HIST/r_${d}.json"
 done
 
+# Rounds fall every 14 days from 2025-03-02; on any other day there is nothing to do.
+DAYS=$(( ( $(date -ud "$DUE" +%s) - $(date -ud 2025-03-02 +%s) ) / 86400 ))
+if [ $(( DAYS % 14 )) -ne 0 ]; then echo "${DUE} is not a forecast due date (cadence 14 d from 2025-03-02); nothing to do"; exit 0; fi
+
 QS="$HIST/q_${DUE}.json"
 for attempt in $(seq 1 30); do
   curl -sfL "$RAW/question_sets/${DUE}-llm.json" -o "$QS.tmp" && mv "$QS.tmp" "$QS" && break
