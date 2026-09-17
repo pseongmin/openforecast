@@ -191,14 +191,26 @@ def forecast(
     history: "pd.Series | None",
     prior: float,
     shrink_n: float = SHRINK_N,
+    use_weather_forecast: bool = False,
 ) -> Estimate:
-    """Pick the estimator the question's source and shape allow, then shrink."""
+    """Pick the estimator the question's source and shape allow, then shrink.
+
+    ``use_weather_forecast`` switches the live ensemble estimator on for the
+    7-day temperature questions; it must stay off in backtests, where the
+    ensemble archive is not available and the flat 0.5 is the honest number.
+    """
     horizon = (resolution_date - asof).days
     ratio = question.relative_threshold
     equal = question.allows_equal
     stamp = pd.Timestamp(asof)
 
     empirical: Estimate | None = None
+    if question.source == "dbnomics" and horizon <= 16 and use_weather_forecast:
+        from core import models_weather
+
+        ens = models_weather.forecastbench_probability(question.qid, asof, resolution_date)
+        if ens is not None:
+            return Estimate(clamp(ens.probability), "ensemble", ens.n_members)
     if use_prior_only(question.source, horizon):
         # Within one round these questions resolve together (one market week,
         # one weather week), so a pooled prior from earlier rounds is a bet on

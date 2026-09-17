@@ -67,7 +67,7 @@ def main() -> int:
         for rd in q.resolution_dates:
             horizon = (rd - qs.forecast_due_date).days
             prior = priors.prior(q, horizon)
-            est = models_dataset.forecast(q, qs.forecast_due_date, rd, hist, prior)
+            est = models_dataset.forecast(q, qs.forecast_due_date, rd, hist, prior, use_weather_forecast=not args.no_live)
             forecasts.append(
                 {"id": q.qid, "source": q.source, "forecast": round(est.probability, 4),
                  "resolution_date": rd.isoformat(), "reasoning": f"{est.method} n={est.n}"}
