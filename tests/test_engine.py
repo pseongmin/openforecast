@@ -51,3 +51,9 @@ def test_log_return_target_starts_at_zero():
     panel = pd.DataFrame({"MOM": rng.normal(0.0002, 0.01, len(idx))}, index=idx)
     out = forecast_draws(panel, ForecastRequest(["MOM"], [127], "log_return", n_draws=500))
     assert abs(out["value"].mean()) < 0.1 and out["value"].std() > 0.05
+
+
+def test_absent_target_is_proxied_not_crashed():
+    out = forecast_draws(_panel(), ForecastRequest(["A", "EMX"], [21], "level", n_draws=300))
+    assert set(out["asset"]) == {"A", "EMX"}
+    assert out[out.asset == "EMX"]["value"].std() > 0

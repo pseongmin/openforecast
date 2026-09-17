@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         scenarios=scenarios,
     )
     frame = forecast_draws(panel, request)
+    missing = [a for a in request.asset_ids if a not in panel.columns]
+    if missing:
+        notes.append(f"PROXY: {missing} absent from the panel; forecast uses the panel-average step series")
 
     out = args.out
     out.parent.mkdir(parents=True, exist_ok=True)
