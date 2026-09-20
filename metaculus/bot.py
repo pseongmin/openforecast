@@ -98,8 +98,15 @@ class OpenForecastBot(ForecastBot):
                     num_searches_to_run=3,
                     num_sites_per_search=10,
                 ).invoke(prompt)
+            elif researcher:
+                # A plain model id: run the research prompt through it. The earlier
+                # code fell through to "" here, so every non-AskNews setup forecast
+                # with no research at all and said nothing about it.
+                research = await self.get_llm("researcher", "llm").invoke(prompt)
             else:
                 research = ""
+            if not research:
+                logger.warning("no research for %s — forecasting on the question alone", question.page_url)
             logger.info("research for %s: %d chars", question.page_url, len(research))
             return research
 
