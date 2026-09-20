@@ -3,8 +3,12 @@
 Round procedure (question set drops 00:00 UTC on the due date; upload by 23:59:59 UTC):
 
 ```
-forecastbench/round.sh 2026-09-27 "Anonymous N" "openforecast v0.1"
-# -> out/2026-09-27.Anonymous_N.1.json  (upload to the GCS folder ForecastBench assigns)
+forecastbench/round.sh 2026-09-27 "XCross" "openforecast 2026-09-27"
+# -> out/2026-09-27.XCross.1.json  (upload to the GCS folder ForecastBench assigns)
+#
+# Submitting publicly: the organisation name is fixed for good and a model name
+# cannot be changed once its round posts, so every round ships its own model
+# version. Bad rounds stay attached to that version, not to the organisation.
 ```
 
 What the forecasters do (walk-forward numbers from `backtest.py` on the 2026-06-21..08-30 rounds):

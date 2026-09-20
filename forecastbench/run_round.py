@@ -1,7 +1,7 @@
 """Produce a ForecastBench forecast set for one question set.
 
     python forecastbench/run_round.py --question-set 2026-09-27-llm.json \
-        --organization "Anonymous N" --model "openforecast v0.1" --out out/
+        --organization "XCross" --model "openforecast 2026-09-27" --out out/
 
 Every question receives a forecast (market: one; dataset: one per resolution
 date), so the 95 % coverage rule cannot be missed by construction. Priors come

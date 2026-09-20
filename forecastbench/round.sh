@@ -10,8 +10,11 @@ PY="${PY:-$REPO/../.venv/bin/python}"
 HIST="${HIST:-$REPO/../data/forecastbench_history}"
 OUT="${OUT:-$REPO/out}"
 DUE="${1:-$(date -u +%F)}"
-ORG="${2:-openforecast-dryrun}"
-MODEL="${3:-openforecast v0.1}"
+ORG="${2:-XCross}"
+# The model name is immutable once a round posts, so each round ships its own
+# version. The organisation accumulates; a weak round stays attached to the
+# version that produced it, which is what lets us submit publicly.
+MODEL="${3:-openforecast ${DUE}}"
 RAW="https://raw.githubusercontent.com/forecastingresearch/forecastbench-datasets/main/datasets"
 mkdir -p "$HIST" "$OUT"
 
