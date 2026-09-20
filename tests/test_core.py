@@ -142,3 +142,4 @@ def test_fred_flat_series_is_structural_no():
     moving = pd.Series(np.linspace(4.0, 5.0, len(idx)), index=idx)
     est2 = models_fred.forecast(q, _date(2026, 9, 1), _date(2026, 9, 8), moving, prior=0.5)
     assert est2.probability > 0.5
+

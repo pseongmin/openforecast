@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import dotenv
 from forecasting_tools import (
     AskNewsSearcher,
+    MetaculusApi,
     BinaryPrediction,
     BinaryQuestion,
     ForecastBot,
@@ -271,16 +274,51 @@ def build_bot(publish: bool, free: bool = False) -> OpenForecastBot:
     )
 
 
+# --- Zero-cost operation -----------------------------------------------------
+# OpenRouter's free tier allows 50 requests per day. The free profile spends about
+# three requests per question (research, forecast, parse), so the bot keeps a
+# per-day ledger and forecasts the questions that close soonest first.
+FREE_DAILY_REQUESTS = int(os.getenv("OPENFORECAST_FREE_DAILY_REQUESTS", "45"))
+FREE_REQUESTS_PER_QUESTION = 3
+LEDGER = Path(os.getenv("OPENFORECAST_LEDGER", str(Path.home() / ".openforecast_requests.json")))
+
+
+def _ledger_today() -> tuple[str, int]:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        data = json.loads(LEDGER.read_text())
+    except (OSError, ValueError):
+        data = {}
+    return today, int(data.get(today, 0))
+
+
+def _ledger_add(n_requests: int) -> None:
+    today, used = _ledger_today()
+    LEDGER.write_text(json.dumps({today: used + n_requests}))
+
+
+def questions_within_budget(targets: list, bot: OpenForecastBot, budget_questions: int) -> list:
+    """Open, not-yet-forecast questions across the targets, soonest-closing first."""
+    pool = []
+    for target in targets:
+        for q in MetaculusApi.get_all_open_questions_from_tournament(target):
+            if bot.skip_previously_forecasted_questions and getattr(q, "already_forecasted", False):
+                continue
+            pool.append(q)
+    pool.sort(key=lambda q: (q.close_time is None, q.close_time))
+    return pool[:budget_questions]
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Run the openforecast Metaculus bot")
     parser.add_argument(
         "--mode",
-        choices=["tournament", "minibench", "test", "cup"],
-        default="tournament",
+        choices=["tournament", "minibench", "both", "test", "cup"],
+        default="both",
     )
     parser.add_argument("--dry-run", action="store_true", help="do not publish to Metaculus")
-    parser.add_argument("--free", action="store_true", help="free-tier profile: OpenRouter free router, 1 pass, 1 forecast")
+    parser.add_argument("--free", action="store_true", help="free-tier profile: OpenRouter free router, 1 pass, 1 forecast, daily budget")
     args = parser.parse_args()
 
     bot = build_bot(publish=not args.dry_run, free=args.free)
@@ -288,15 +326,31 @@ def main() -> None:
     targets = {
         "tournament": [client.CURRENT_AI_COMPETITION_ID],
         "minibench": [client.CURRENT_MINIBENCH_ID],
+        "both": [client.CURRENT_MINIBENCH_ID, client.CURRENT_AI_COMPETITION_ID],
         "test": ["bot-testing-area"],
         "cup": [client.CURRENT_METACULUS_CUP_ID],
     }[args.mode]
     if args.mode in ("test", "cup"):
         bot.skip_previously_forecasted_questions = False
 
-    reports = []
-    for target in targets:
-        reports += asyncio.run(bot.forecast_on_tournament(target, return_exceptions=True))
+    if args.free:
+        today, used = _ledger_today()
+        remaining = max(0, FREE_DAILY_REQUESTS - used)
+        budget = remaining // FREE_REQUESTS_PER_QUESTION
+        logger.info("free tier: %d/%d requests used today (%s); budget %d question(s)", used, FREE_DAILY_REQUESTS, today, budget)
+        if budget == 0:
+            logger.info("daily free budget exhausted; nothing to do until tomorrow (UTC)")
+            return
+        questions = questions_within_budget(targets, bot, budget)
+        if not questions:
+            logger.info("no open questions left to forecast")
+            return
+        reports = asyncio.run(bot.forecast_questions(questions, return_exceptions=True))
+        _ledger_add(FREE_REQUESTS_PER_QUESTION * len(questions))
+    else:
+        reports = []
+        for target in targets:
+            reports += asyncio.run(bot.forecast_on_tournament(target, return_exceptions=True))
     bot.log_report_summary(reports)
 
 
