@@ -232,14 +232,33 @@ class OpenForecastBot(ForecastBot):
         return f"{lower}\n{upper}"
 
 
-def build_bot(publish: bool) -> OpenForecastBot:
+# OpenRouter's free tier allows 50 requests per day without purchased credits
+# (1000 per day after buying 10 credits), so the free profile spends one research
+# pass and one forecast per question on the free-model router.
+FREE_PROFILE = {
+    "model": "openrouter/openrouter/free",
+    "parser": "openrouter/openrouter/free",
+    "researcher": "openrouter/openrouter/free",
+    "research_passes": "1",
+    "predictions": "1",
+}
+
+
+def build_bot(publish: bool, free: bool = False) -> OpenForecastBot:
     """Model choice is environment-driven so the same code runs on any credits."""
-    model_name = os.getenv("OPENFORECAST_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
-    parser_name = os.getenv("OPENFORECAST_PARSER", "openrouter/openai/gpt-4o-mini")
-    researcher = os.getenv("OPENFORECAST_RESEARCHER", "asknews/news-summaries")
+    defaults = FREE_PROFILE if free else {
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "parser": "openrouter/openai/gpt-4o-mini",
+        "researcher": "asknews/news-summaries",
+        "research_passes": "2",
+        "predictions": "3",
+    }
+    model_name = os.getenv("OPENFORECAST_MODEL", defaults["model"])
+    parser_name = os.getenv("OPENFORECAST_PARSER", defaults["parser"])
+    researcher = os.getenv("OPENFORECAST_RESEARCHER", defaults["researcher"])
     return OpenForecastBot(
-        research_reports_per_question=int(os.getenv("OPENFORECAST_RESEARCH_PASSES", "2")),
-        predictions_per_research_report=int(os.getenv("OPENFORECAST_PREDICTIONS", "3")),
+        research_reports_per_question=int(os.getenv("OPENFORECAST_RESEARCH_PASSES", defaults["research_passes"])),
+        predictions_per_research_report=int(os.getenv("OPENFORECAST_PREDICTIONS", defaults["predictions"])),
         publish_reports_to_metaculus=publish,
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
@@ -261,9 +280,10 @@ def main() -> None:
         default="tournament",
     )
     parser.add_argument("--dry-run", action="store_true", help="do not publish to Metaculus")
+    parser.add_argument("--free", action="store_true", help="free-tier profile: OpenRouter free router, 1 pass, 1 forecast")
     args = parser.parse_args()
 
-    bot = build_bot(publish=not args.dry_run)
+    bot = build_bot(publish=not args.dry_run, free=args.free)
     client = MetaculusClient()
     targets = {
         "tournament": [client.CURRENT_AI_COMPETITION_ID],
